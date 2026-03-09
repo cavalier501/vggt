@@ -9,6 +9,11 @@ from hydra import initialize, compose
 from omegaconf import DictConfig, OmegaConf
 from trainer import Trainer
 
+import torch
+import torch_npu
+from torch_npu.contrib import transfer_to_npu
+
+torch.npu.config.allow_internal_format = False
 
 def main():
     parser = argparse.ArgumentParser(description="Train model with configurable YAML file")

@@ -550,9 +550,8 @@ class Trainer:
 
             
             with torch.cuda.amp.autocast(enabled=False):
+                batch = copy_data_to_device(batch, self.device, non_blocking=True)
                 batch = self._process_batch(batch)
-
-            batch = copy_data_to_device(batch, self.device, non_blocking=True)
 
             accum_steps = self.accum_steps
 

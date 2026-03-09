@@ -20,47 +20,7 @@ from data.base_dataset import BaseDataset
 
 
 SEEN_CATEGORIES = [
-    "apple",
-    "backpack",
-    "banana",
-    "baseballbat",
-    "baseballglove",
-    "bench",
-    "bicycle",
-    "bottle",
-    "bowl",
-    "broccoli",
-    "cake",
-    "car",
-    "carrot",
-    "cellphone",
-    "chair",
-    "cup",
-    "donut",
-    "hairdryer",
-    "handbag",
-    "hydrant",
-    "keyboard",
-    "laptop",
-    "microwave",
-    "motorcycle",
-    "mouse",
-    "orange",
-    "parkingmeter",
-    "pizza",
-    "plant",
-    "stopsign",
-    "teddybear",
-    "toaster",
-    "toilet",
-    "toybus",
-    "toyplane",
-    "toytrain",
-    "toytruck",
     "tv",
-    "umbrella",
-    "vase",
-    "wineglass",
 ]
 
 
@@ -104,7 +64,7 @@ class Co3dDataset(BaseDataset):
         category = sorted(SEEN_CATEGORIES)
 
         if self.debug:
-            category = ["apple"]
+            category = ["tv"]
 
         if split == "train":
             split_name_list = ["train"]

@@ -62,7 +62,6 @@ def normalize_camera_extrinsics_and_points_batch(
 
     B, S, _, _ = extrinsics.shape
     device = extrinsics.device
-    assert device == torch.device("cpu")
 
 
     # Convert extrinsics to homogeneous form: (B, N,4,4)
