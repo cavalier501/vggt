@@ -13,6 +13,8 @@ from typing import List, Optional
 
 import numpy as np
 import torch
+import torch_npu
+from torch_npu.contrib import transfer_to_npu
 from tqdm.auto import tqdm
 import viser
 import viser.transforms as viser_tf
@@ -29,6 +31,7 @@ from vggt.models.vggt import VGGT
 from vggt.utils.load_fn import load_and_preprocess_images
 from vggt.utils.geometry import closed_form_inverse_se3, unproject_depth_map_to_point_map
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
+from demo_model_loader import load_vggt_weights
 
 
 def viser_wrapper(
@@ -289,13 +292,13 @@ def apply_sky_segmentation(conf: np.ndarray, image_folder: str) -> np.ndarray:
         else:
             sky_mask = segment_sky(image_path, skyseg_session, mask_filepath)
 
-        # Resize mask to match H×W if needed
+        # Resize mask to match HxW if needed
         if sky_mask.shape[0] != H or sky_mask.shape[1] != W:
             sky_mask = cv2.resize(sky_mask, (W, H))
 
         sky_mask_list.append(sky_mask)
 
-    # Convert list to numpy array with shape S×H×W
+    # Convert list to numpy array with shape SxHxW
     sky_mask_array = np.array(sky_mask_list)
     # Apply sky mask to confidence scores
     sky_mask_binary = (sky_mask_array > 0.1).astype(np.float32)
@@ -307,7 +310,7 @@ def apply_sky_segmentation(conf: np.ndarray, image_folder: str) -> np.ndarray:
 
 parser = argparse.ArgumentParser(description="VGGT demo with viser for 3D visualization")
 parser.add_argument(
-    "--image_folder", type=str, default="examples/kitchen/images/", help="Path to folder containing images"
+    "--image_folder", type=str, default="examples/kitchen/images_few/", help="Path to folder containing images"
 )
 parser.add_argument("--use_point_map", action="store_true", help="Use point map instead of depth-based points")
 parser.add_argument("--background_mode", action="store_true", help="Run the viser server in background mode")
@@ -316,6 +319,7 @@ parser.add_argument(
     "--conf_threshold", type=float, default=25.0, help="Initial percentage of low-confidence points to filter out"
 )
 parser.add_argument("--mask_sky", action="store_true", help="Apply sky segmentation to filter out sky points")
+parser.add_argument("--pt_path", type=str, default="/data/zh00942897/code_v1/vggt_npu_adapt/zh_utils/vggt_weight/model.pt", help="Optional local path to model.pt")
 
 
 def main():
@@ -342,16 +346,11 @@ def main():
     print(f"Using device: {device}")
 
     print("Initializing and loading VGGT model...")
-    # model = VGGT.from_pretrained("facebook/VGGT-1B")
-
     model = VGGT()
-    _URL = "https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt"
-    model.load_state_dict(torch.hub.load_state_dict_from_url(_URL))
-
+    model = load_vggt_weights(model, args.pt_path)
     model.eval()
     model = model.to(device)
 
-    # Use the provided image folder path
     print(f"Loading images from {args.image_folder}...")
     image_names = glob.glob(os.path.join(args.image_folder, "*"))
     print(f"Found {len(image_names)} images")
@@ -360,21 +359,33 @@ def main():
     print(f"Preprocessed images shape: {images.shape}")
 
     print("Running inference...")
-    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    dtype = torch.bfloat16
 
     with torch.no_grad():
         with torch.cuda.amp.autocast(dtype=dtype):
-            predictions = model(images)
+            batched_images = images[None]  # add batch dimension
+            aggregated_tokens_list, ps_idx = model.aggregator(batched_images)
+
+        pose_enc = model.camera_head(aggregated_tokens_list)[-1]
+        extrinsic, intrinsic = pose_encoding_to_extri_intri(pose_enc, batched_images.shape[-2:])
+        depth_map, depth_conf = model.depth_head(aggregated_tokens_list, batched_images, ps_idx)
+        point_map, point_conf = model.point_head(aggregated_tokens_list, batched_images, ps_idx)
 
     print("Converting pose encoding to extrinsic and intrinsic matrices...")
-    extrinsic, intrinsic = pose_encoding_to_extri_intri(predictions["pose_enc"], images.shape[-2:])
-    predictions["extrinsic"] = extrinsic
-    predictions["intrinsic"] = intrinsic
+    predictions = {
+        "images": batched_images.squeeze(0),
+        "world_points": point_map.squeeze(0),
+        "world_points_conf": point_conf.squeeze(0),
+        "depth": depth_map.squeeze(0),
+        "depth_conf": depth_conf.squeeze(0),
+        "extrinsic": extrinsic.squeeze(0),
+        "intrinsic": intrinsic.squeeze(0),
+    }
 
     print("Processing model outputs...")
     for key in predictions.keys():
         if isinstance(predictions[key], torch.Tensor):
-            predictions[key] = predictions[key].cpu().numpy().squeeze(0)  # remove batch dimension and convert to numpy
+            predictions[key] = predictions[key].cpu().numpy()
 
     if args.use_point_map:
         print("Visualizing 3D points from point map")
@@ -386,7 +397,7 @@ def main():
 
     print("Starting viser visualization...")
 
-    viser_server = viser_wrapper(
+    viser_wrapper(
         predictions,
         port=args.port,
         init_conf_threshold=args.conf_threshold,
