@@ -1,5 +1,7 @@
 import os
 import torch
+import torch_npu
+from torch_npu.contrib import transfer_to_npu
 import numpy as np
 import gzip
 import json
@@ -11,7 +13,6 @@ from vggt.utils.rotation import mat_to_quat
 from vggt.utils.load_fn import load_and_preprocess_images
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 from vggt.utils.geometry import closed_form_inverse_se3
-from ba import run_vggt_with_ba
 import argparse
 
 # Suppress DINO v2 logs
@@ -173,6 +174,8 @@ def se3_to_relative_pose_error(pred_se3, gt_se3, num_frames):
     Returns:
         Rotation and translation angle errors in degrees
     """
+    pred_se3 = pred_se3.float()
+    gt_se3 = gt_se3.float()
     pair_idx_i1, pair_idx_i2 = build_pair_index(num_frames)
 
     relative_pose_gt = gt_se3[pair_idx_i1].bmm(
@@ -288,6 +291,7 @@ def process_sequence(model, seq_name, seq_data, category, co3d_dir, min_num_imag
     images = load_and_preprocess_images(image_names).to(device)
 
     if use_ba:
+        from ba import run_vggt_with_ba
         try:
             pred_extrinsic = run_vggt_with_ba(model, images, image_names=image_names, dtype=dtype)
         except Exception as e:
@@ -332,7 +336,8 @@ def main():
 
     # Setup device and data type
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    # dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    dtype = torch.bfloat16
 
     # Load model
     model = load_model(device, model_path=args.model_path)
