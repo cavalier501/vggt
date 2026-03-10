@@ -292,13 +292,13 @@ def apply_sky_segmentation(conf: np.ndarray, image_folder: str) -> np.ndarray:
         else:
             sky_mask = segment_sky(image_path, skyseg_session, mask_filepath)
 
-        # Resize mask to match HxW if needed
+        # Resize mask to match H×W if needed
         if sky_mask.shape[0] != H or sky_mask.shape[1] != W:
             sky_mask = cv2.resize(sky_mask, (W, H))
 
         sky_mask_list.append(sky_mask)
 
-    # Convert list to numpy array with shape SxHxW
+    # Convert list to numpy array with shape S×H×W
     sky_mask_array = np.array(sky_mask_list)
     # Apply sky mask to confidence scores
     sky_mask_binary = (sky_mask_array > 0.1).astype(np.float32)
@@ -351,6 +351,7 @@ def main():
     model.eval()
     model = model.to(device)
 
+    # Use the provided image folder path
     print(f"Loading images from {args.image_folder}...")
     image_names = glob.glob(os.path.join(args.image_folder, "*"))
     print(f"Found {len(image_names)} images")
@@ -363,29 +364,17 @@ def main():
 
     with torch.no_grad():
         with torch.cuda.amp.autocast(dtype=dtype):
-            batched_images = images[None]  # add batch dimension
-            aggregated_tokens_list, ps_idx = model.aggregator(batched_images)
-
-        pose_enc = model.camera_head(aggregated_tokens_list)[-1]
-        extrinsic, intrinsic = pose_encoding_to_extri_intri(pose_enc, batched_images.shape[-2:])
-        depth_map, depth_conf = model.depth_head(aggregated_tokens_list, batched_images, ps_idx)
-        point_map, point_conf = model.point_head(aggregated_tokens_list, batched_images, ps_idx)
+            predictions = model(images)
 
     print("Converting pose encoding to extrinsic and intrinsic matrices...")
-    predictions = {
-        "images": batched_images.squeeze(0),
-        "world_points": point_map.squeeze(0),
-        "world_points_conf": point_conf.squeeze(0),
-        "depth": depth_map.squeeze(0),
-        "depth_conf": depth_conf.squeeze(0),
-        "extrinsic": extrinsic.squeeze(0),
-        "intrinsic": intrinsic.squeeze(0),
-    }
+    extrinsic, intrinsic = pose_encoding_to_extri_intri(predictions["pose_enc"], images.shape[-2:])
+    predictions["extrinsic"] = extrinsic
+    predictions["intrinsic"] = intrinsic
 
     print("Processing model outputs...")
     for key in predictions.keys():
         if isinstance(predictions[key], torch.Tensor):
-            predictions[key] = predictions[key].cpu().numpy()
+            predictions[key] = predictions[key].cpu().numpy().squeeze(0)  # remove batch dimension and convert to numpy
 
     if args.use_point_map:
         print("Visualizing 3D points from point map")
@@ -397,7 +386,7 @@ def main():
 
     print("Starting viser visualization...")
 
-    viser_wrapper(
+    viser_server = viser_wrapper(
         predictions,
         port=args.port,
         init_conf_threshold=args.conf_threshold,
