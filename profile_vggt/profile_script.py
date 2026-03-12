@@ -98,7 +98,7 @@ def load_images(image_folder, device):
     if len(image_names) == 0:
         raise ValueError(f"No images found in {image_folder}")
     print(f"Found {len(image_names)} images")
-    images = load_and_preprocess_images(image_names).to(device)
+    images = load_and_preprocess_images(image_names, mode="pad").to(device)
     print(f"Preprocessed images shape: {images.shape}")
     return image_names, images
 
