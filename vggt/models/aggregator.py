@@ -1,4 +1,4 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
+﻿# Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the license found in the
@@ -12,7 +12,9 @@ from torch.utils.checkpoint import checkpoint
 from typing import Optional, Tuple, Union, List, Dict, Any
 
 from vggt.layers import PatchEmbed
+from vggt.layers.attention import Attention
 from vggt.layers.block import Block
+from vggt.layers.mlp import Mlp
 from vggt.layers.rope import RotaryPositionEmbedding2D, PositionGetter
 from vggt.layers.vision_transformer import vit_small, vit_base, vit_large, vit_giant2
 
@@ -87,6 +89,8 @@ class Aggregator(nn.Module):
                     proj_bias=proj_bias,
                     ffn_bias=ffn_bias,
                     init_values=init_values,
+                    attn_class=Attention,
+                    ffn_layer=Mlp,
                     qk_norm=qk_norm,
                     rope=self.rope,
                 )
@@ -104,6 +108,8 @@ class Aggregator(nn.Module):
                     proj_bias=proj_bias,
                     ffn_bias=ffn_bias,
                     init_values=init_values,
+                    attn_class=Attention,
+                    ffn_layer=Mlp,
                     qk_norm=qk_norm,
                     rope=self.rope,
                 )
