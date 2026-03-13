@@ -17,6 +17,7 @@ from vggt.layers.block import Block
 from vggt.layers.mlp import Mlp
 from vggt.layers.rope import RotaryPositionEmbedding2D, PositionGetter
 from vggt.layers.vision_transformer import vit_small, vit_base, vit_large, vit_giant2
+from vggt.graph import ACLGraphBlockRunner, GraphConfig
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +146,17 @@ class Aggregator(nn.Module):
             self.register_buffer(name, torch.FloatTensor(value).view(1, 1, 3, 1, 1), persistent=False)
 
         self.use_reentrant = False # hardcoded to False
+        self._graph_runner: Optional[ACLGraphBlockRunner] = None
+
+    def enable_graph(self, config: GraphConfig) -> None:
+        if config.force_eager_sdpa:
+            for block in list(self.frame_blocks) + list(self.global_blocks):
+                if hasattr(block, "attn") and hasattr(block.attn, "fused_attn"):
+                    block.attn.fused_attn = False
+        self._graph_runner = ACLGraphBlockRunner(config)
+
+    def disable_graph(self) -> None:
+        self._graph_runner = None
 
     def __build_patch_embed__(
         self,
@@ -281,7 +293,9 @@ class Aggregator(nn.Module):
             if self.training:
                 tokens = checkpoint(self.frame_blocks[frame_idx], tokens, pos, use_reentrant=self.use_reentrant)
             else:
-                tokens = self.frame_blocks[frame_idx](tokens, pos=pos)
+                tokens = self._run_block(
+                    self.frame_blocks[frame_idx], tokens, pos, block_kind="frame", block_idx=frame_idx
+                )
             frame_idx += 1
             intermediates.append(tokens.view(B, S, P, C))
 
@@ -304,12 +318,19 @@ class Aggregator(nn.Module):
             if self.training:
                 tokens = checkpoint(self.global_blocks[global_idx], tokens, pos, use_reentrant=self.use_reentrant)
             else:
-                tokens = self.global_blocks[global_idx](tokens, pos=pos)
+                tokens = self._run_block(
+                    self.global_blocks[global_idx], tokens, pos, block_kind="global", block_idx=global_idx
+                )
             global_idx += 1
             intermediates.append(tokens.view(B, S, P, C))
 
         return tokens, global_idx, intermediates
 
+
+    def _run_block(self, block, tokens, pos, block_kind, block_idx):
+        if self.training or self._graph_runner is None or not self._graph_runner.is_enabled():
+            return block(tokens, pos=pos)
+        return self._graph_runner.run(block, tokens, pos, block_kind=block_kind, block_idx=block_idx)
 
 def slice_expand_and_flatten(token_tensor, B, S):
     """
@@ -335,3 +356,6 @@ def slice_expand_and_flatten(token_tensor, B, S):
     # Finally flatten => shape (B*S, ...)
     combined = combined.view(B * S, *combined.shape[2:])
     return combined
+
+
+
