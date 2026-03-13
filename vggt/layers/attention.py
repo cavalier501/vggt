@@ -1,4 +1,4 @@
-﻿# Copyright (c) Meta Platforms, Inc. and affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 #
 # This source code is licensed under the Apache License, Version 2.0
 # found in the LICENSE file in the root directory of this source tree.
@@ -47,6 +47,7 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
         self.rope = rope
+        self._graph_capture_mode = False
 
     def forward(self, x: Tensor, pos=None) -> Tensor:
         B, N, C = x.shape
@@ -77,19 +78,9 @@ class Attention_fused(nn.Module):
     """
     Fused attention implementation for Aggregator inference blocks.
 
-    This class is currently not enabled in production because performance
-    validation did not show a clear benefit.
-
-    The evaluated inference path uses:
-    - qkv_bias=True
-    - proj_bias=True
-    - attn_drop=0.0
-    - proj_drop=0.0
-    - q_norm=LayerNorm
-    - k_norm=LayerNorm
-    - fused_attn=True
-    - rope=RotaryPositionEmbedding2D
-    - training=False
+    Both eager and torch_compile paths share the same operator set:
+    - RoPE: RotaryPositionEmbedding2D.forward -> npu_rotary_mul
+    - Attention: npu_fused_infer_attention_score
     """
 
     def __init__(
@@ -119,56 +110,96 @@ class Attention_fused(nn.Module):
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
         self.rope = rope
+        self._graph_backend = "eager"
 
-    def _apply_fused_rope(self, tokens: Tensor, positions: Tensor) -> Tensor:
-        import torch_npu
+    def set_graph_backend(self, mode: str) -> None:
+        if mode not in {"eager", "torch_compile"}:
+            raise ValueError(f"Unsupported graph backend mode: {mode}")
+        self._graph_backend = mode
 
-        feature_dim = tokens.size(-1) // 2
-        max_position = int(positions.max()) + 1
-        cos_comp, sin_comp = self.rope._compute_frequency_components(
-            feature_dim, max_position, tokens.device, tokens.dtype
-        )
+    def _apply_standard_rope(self, q: Tensor, k: Tensor, pos: Tensor | None) -> tuple[Tensor, Tensor]:
+        if self.rope is None:
+            return q, k
+        return self.rope(q, pos), self.rope(k, pos)
 
-        vertical_features, horizontal_features = tokens.chunk(2, dim=-1)
-
-        cos_y = F.embedding(positions[..., 0], cos_comp)[:, None, :, :].contiguous()
-        sin_y = F.embedding(positions[..., 0], sin_comp)[:, None, :, :].contiguous()
-        vertical_features = torch_npu.npu_rotary_mul(vertical_features, cos_y, sin_y, rotary_mode="half")
-
-        cos_x = F.embedding(positions[..., 1], cos_comp)[:, None, :, :].contiguous()
-        sin_x = F.embedding(positions[..., 1], sin_comp)[:, None, :, :].contiguous()
-        horizontal_features = torch_npu.npu_rotary_mul(horizontal_features, cos_x, sin_x, rotary_mode="half")
-
-        return torch.cat((vertical_features, horizontal_features), dim=-1)
-
-    def forward(self, x: Tensor, pos=None) -> Tensor:
-        import torch_npu
-
-        B, N, C = x.shape
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0)
-        q, k = self.q_norm(q), self.k_norm(k)
-        q = self._apply_fused_rope(q, pos)
-        k = self._apply_fused_rope(k, pos)
-
-        # LayerNorm keeps q/k in fp32 under autocast while v may remain bf16.
-        # npu_fusion_attention requires query/key/value to have the same dtype.
+    def _to_attention_dtype(self, q: Tensor, k: Tensor, v: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         attn_dtype = v.dtype
         if q.dtype != attn_dtype:
             q = q.to(attn_dtype)
         if k.dtype != attn_dtype:
             k = k.to(attn_dtype)
+        return q, k, v
 
-        x = torch_npu.npu_fusion_attention(
+    def _run_fia_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+        import torch_npu
+
+        seq_len = q.shape[2]
+        return torch_npu.npu_fused_infer_attention_score(
             q.contiguous(),
             k.contiguous(),
             v.contiguous(),
-            self.num_heads,
-            "BNSD",
+            actual_seq_lengths=[seq_len],
+            actual_seq_lengths_kv=[seq_len],
+            num_heads=self.num_heads,
+            input_layout="BNSD",
             scale=float(self.scale),
-            keep_prob=1.0,
+            pre_tokens=65535,
+            next_tokens=65535,
         )[0]
 
+    def forward(self, x: Tensor, pos=None) -> Tensor:
+        B, N, C = x.shape
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
+        q, k = self.q_norm(q), self.k_norm(k)
+
+        if self._graph_backend not in {"eager", "torch_compile"}:
+            raise RuntimeError(f"Unknown graph backend mode: {self._graph_backend}")
+
+        q, k = self._apply_standard_rope(q, k, pos)
+        q, k, v = self._to_attention_dtype(q, k, v)
+        x = self._run_fia_attention(q, k, v)
+
+        x = x.transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
+
+class AttentionFusedAclgraphDeprecated(Attention_fused):
+    """Deprecated ACLGraph backup for historical reference only.
+
+    This class is intentionally not used by business code. It is kept as a code
+    backup because some fused NPU attention operators do not work reliably with
+    raw NPUGraph capture/replay.
+    """
+
+    def set_graph_backend(self, mode: str) -> None:
+        if mode not in {"eager", "torch_compile", "aclgraph"}:
+            raise ValueError(f"Unsupported graph backend mode: {mode}")
+        self._graph_backend = mode
+
+    def set_graph_capture_mode(self, enabled: bool) -> None:
+        self.set_graph_backend("aclgraph" if enabled else "eager")
+
+    def _run_aclgraph_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+        q = q * self.scale
+        attn = q @ k.transpose(-2, -1)
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+        return attn @ v
+
+    def forward(self, x: Tensor, pos=None) -> Tensor:
+        if self._graph_backend != "aclgraph":
+            return super().forward(x, pos=pos)
+
+        B, N, C = x.shape
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
+        q, k = self.q_norm(q), self.k_norm(k)
+        q, k = self._apply_standard_rope(q, k, pos)
+        q, k, v = self._to_attention_dtype(q, k, v)
+        x = self._run_aclgraph_attention(q, k, v)
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
@@ -194,4 +225,3 @@ class MemEffAttention(Attention):
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
-

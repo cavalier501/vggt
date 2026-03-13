@@ -18,7 +18,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 
 class PositionGetter:
@@ -82,6 +82,7 @@ class RotaryPositionEmbedding2D(nn.Module):
         self.base_frequency = frequency
         self.scaling_factor = scaling_factor
         self.frequency_cache: Dict[Tuple, Tuple[torch.Tensor, torch.Tensor]] = {}
+        self._max_position_override: Optional[int] = None
 
     def _compute_frequency_components(
         self, dim: int, seq_len: int, device: torch.device, dtype: torch.dtype
@@ -115,6 +116,9 @@ class RotaryPositionEmbedding2D(nn.Module):
             self.frequency_cache[cache_key] = (cos_components, sin_components)
 
         return self.frequency_cache[cache_key]
+
+    def set_max_position_override(self, max_position: Optional[int]) -> None:
+        self._max_position_override = max_position
 
     @staticmethod
     def _rotate_features(x: torch.Tensor) -> torch.Tensor:
@@ -173,11 +177,11 @@ class RotaryPositionEmbedding2D(nn.Module):
         # Compute feature dimension for each spatial direction
         feature_dim = tokens.size(-1) // 2
 
-        # Get frequency components
-        max_position = int(positions.max()) + 1
+        if self._max_position_override is not None:
+            max_position = self._max_position_override
+        else:
+            max_position = int(positions.max()) + 1
         cos_comp, sin_comp = self._compute_frequency_components(feature_dim, max_position, tokens.device, tokens.dtype)
-
-        # Split features for vertical and horizontal processing
         vertical_features, horizontal_features = tokens.chunk(2, dim=-1)
 
         # Apply RoPE separately for each dimension
@@ -186,3 +190,5 @@ class RotaryPositionEmbedding2D(nn.Module):
 
         # Combine processed features
         return torch.cat((vertical_features, horizontal_features), dim=-1)
+
+

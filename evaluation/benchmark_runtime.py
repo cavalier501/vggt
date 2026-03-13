@@ -2,6 +2,7 @@
 usage:
   python evaluation/benchmark_runtime.py --mode aggregator --frames 1 2 4 8 10 20 50 100 200 --model_path /path/to/model.pt
   python evaluation/benchmark_runtime.py --mode full --frames 1 2 4 8 10 20 50 100 200 --model_path /path/to/model.pt
+  python evaluation/benchmark_runtime.py --mode aggregator --graph --frames 1 2 4 8 10 20 50 100 200 --model_path /path/to/model.pt
 """
 
 import argparse
@@ -53,6 +54,7 @@ def parse_args():
         help="Path to save benchmark results as JSON",
     )
     parser.add_argument("--model_path", type=str, default=None, help="Optional local path to model.pt")
+    parser.add_argument("--graph", action="store_true", help="Enable ACLGraph on model.aggregator during inference")
     return parser.parse_args()
 
 
@@ -139,9 +141,9 @@ def run_forward(model, images, mode, dtype):
 
 
 
-def load_model(device, model_path):
+def load_model(device, model_path, enable_graph=False):
     print("Initializing and loading VGGT model...")
-    model = VGGT()
+    model = VGGT(graph_mode=enable_graph)
     model = load_vggt_weights(model, model_path)
     model.eval()
     model = model.to(device)
@@ -189,6 +191,7 @@ def benchmark_one_setting(model, batch_size, frames, height, width, mode, warmup
 
     result = {
         "mode": mode,
+        "execution_mode": "graph" if getattr(model.aggregator, "_graph_runner", None) is not None else "eager",
         "frames": frames,
         "batch_size": batch_size,
         "time_mean_s": mean(timings),
@@ -213,6 +216,7 @@ def benchmark_one_setting(model, batch_size, frames, height, width, mode, warmup
 def print_results_table(results):
     headers = [
         "mode",
+        "execution_mode",
         "frames",
         "time_mean_s",
         "peak_mem_gb",
@@ -231,6 +235,7 @@ def print_results_table(results):
         rows.append(
             [
                 item["mode"],
+                item["execution_mode"],
                 str(item["frames"]),
                 f'{item["time_mean_s"]:.4f}',
                 "null" if item["peak_mem_gb"] is None else f'{item["peak_mem_gb"]:.4f}',
@@ -300,7 +305,7 @@ def main():
     print(f"Using dtype: {dtype}")
     print(f"Benchmark mode: {args.mode}")
 
-    model = load_model(device, args.model_path)
+    model = load_model(device, args.model_path, enable_graph=args.graph)
 
     results = []
     for frames in args.frames:
@@ -333,3 +338,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+

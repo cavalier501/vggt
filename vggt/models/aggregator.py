@@ -1,4 +1,4 @@
-﻿# Copyright (c) Meta Platforms, Inc. and affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the license found in the
@@ -12,11 +12,12 @@ from torch.utils.checkpoint import checkpoint
 from typing import Optional, Tuple, Union, List, Dict, Any
 
 from vggt.layers import PatchEmbed
-from vggt.layers.attention import Attention
+from vggt.layers.attention import Attention_fused
 from vggt.layers.block import Block
 from vggt.layers.mlp import Mlp
 from vggt.layers.rope import RotaryPositionEmbedding2D, PositionGetter
 from vggt.layers.vision_transformer import vit_small, vit_base, vit_large, vit_giant2
+from vggt.graph import GraphConfig, TorchCompileBlockRunner
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ class Aggregator(nn.Module):
                     proj_bias=proj_bias,
                     ffn_bias=ffn_bias,
                     init_values=init_values,
-                    attn_class=Attention,
+                    attn_class=Attention_fused,
                     ffn_layer=Mlp,
                     qk_norm=qk_norm,
                     rope=self.rope,
@@ -108,7 +109,7 @@ class Aggregator(nn.Module):
                     proj_bias=proj_bias,
                     ffn_bias=ffn_bias,
                     init_values=init_values,
-                    attn_class=Attention,
+                    attn_class=Attention_fused,
                     ffn_layer=Mlp,
                     qk_norm=qk_norm,
                     rope=self.rope,
@@ -145,6 +146,23 @@ class Aggregator(nn.Module):
             self.register_buffer(name, torch.FloatTensor(value).view(1, 1, 3, 1, 1), persistent=False)
 
         self.use_reentrant = False # hardcoded to False
+        self._graph_runner: Optional[Any] = None
+
+    def enable_graph(self, config: GraphConfig) -> None:
+        if self._graph_runner is not None:
+            self._graph_runner.clear_cache()
+        if config.backend != "torch_compile":
+            raise ValueError(f"Unsupported graph backend: {config.backend}")
+        self._graph_runner = TorchCompileBlockRunner(config)
+
+    def disable_graph(self) -> None:
+        if self._graph_runner is not None:
+            self._graph_runner.clear_cache()
+        self._graph_runner = None
+
+    def clear_graph_cache(self) -> None:
+        if self._graph_runner is not None:
+            self._graph_runner.clear_cache()
 
     def __build_patch_embed__(
         self,
@@ -281,7 +299,9 @@ class Aggregator(nn.Module):
             if self.training:
                 tokens = checkpoint(self.frame_blocks[frame_idx], tokens, pos, use_reentrant=self.use_reentrant)
             else:
-                tokens = self.frame_blocks[frame_idx](tokens, pos=pos)
+                tokens = self._run_block(
+                    self.frame_blocks[frame_idx], tokens, pos, block_kind="frame", block_idx=frame_idx
+                )
             frame_idx += 1
             intermediates.append(tokens.view(B, S, P, C))
 
@@ -304,12 +324,19 @@ class Aggregator(nn.Module):
             if self.training:
                 tokens = checkpoint(self.global_blocks[global_idx], tokens, pos, use_reentrant=self.use_reentrant)
             else:
-                tokens = self.global_blocks[global_idx](tokens, pos=pos)
+                tokens = self._run_block(
+                    self.global_blocks[global_idx], tokens, pos, block_kind="global", block_idx=global_idx
+                )
             global_idx += 1
             intermediates.append(tokens.view(B, S, P, C))
 
         return tokens, global_idx, intermediates
 
+
+    def _run_block(self, block, tokens, pos, block_kind, block_idx):
+        if self.training or self._graph_runner is None or not self._graph_runner.is_enabled():
+            return block(tokens, pos=pos)
+        return self._graph_runner.run(block, tokens, pos, block_kind=block_kind, block_idx=block_idx)
 
 def slice_expand_and_flatten(token_tensor, B, S):
     """
@@ -335,3 +362,9 @@ def slice_expand_and_flatten(token_tensor, B, S):
     # Finally flatten => shape (B*S, ...)
     combined = combined.view(B * S, *combined.shape[2:])
     return combined
+
+
+
+
+
+
