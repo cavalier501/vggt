@@ -1,4 +1,4 @@
-import pytest
+﻿import pytest
 from functools import partial
 import torch
 
@@ -146,6 +146,29 @@ def test_aggregator_aclgraph_matches_eager():
         assert torch.allclose(ref, out, atol=1e-3, rtol=1e-3)
 
 
+def test_aggregator_aclgraph_uses_shared_pool_when_available():
+    device = _require_aclgraph_npu()
+    model = _build_aggregator(device)
+    model.enable_graph(GraphConfig(enabled=True, shared_pool=True, debug=True))
+
+    runner = model._graph_runner
+    assert runner is not None
+
+
+    torch.manual_seed(123)
+    images = torch.rand(1, 2, 3, 28, 28, device=device, dtype=torch.float32)
+
+    with torch.no_grad():
+        model(images)
+        if hasattr(torch.npu, "synchronize"):
+            torch.npu.synchronize()
+
+    assert runner.uses_shared_pool
+    assert len(runner.cache) > 0
+    assert runner.graph_pool is not None
+    assert runner.capture_with_pool_count > 0
+
+
 def test_aggregator_disable_graph_restores_eager_path():
     device = _require_aclgraph_npu()
     model = _build_aggregator(device)
@@ -162,3 +185,5 @@ def test_aggregator_disable_graph_restores_eager_path():
     assert isinstance(out, list)
     assert len(out) == model.depth
     assert patch_start_idx == model.patch_start_idx
+
+

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+﻿from dataclasses import dataclass
 
 
 @dataclass(slots=True)
@@ -8,3 +8,4 @@ class GraphConfig:
     scope: str = "block"
     debug: bool = False
     force_eager_sdpa: bool = True
+    shared_pool: bool = True

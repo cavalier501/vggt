@@ -1,8 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 from torch import nn
@@ -38,6 +38,9 @@ class ACLGraphBlockRunner:
     def __init__(self, config: GraphConfig):
         self.config = config
         self.cache: Dict[GraphCacheKey, ACLGraphEntry] = {}
+        self.graph_pool: Optional[Any] = self._init_graph_pool()
+        self.uses_shared_pool: bool = self.graph_pool is not None
+        self.capture_with_pool_count: int = 0
 
     @staticmethod
     def _npu_available() -> bool:
@@ -48,6 +51,11 @@ class ACLGraphBlockRunner:
             and hasattr(torch.npu, "NPUGraph")
             and hasattr(torch.npu, "graph")
         )
+
+    def _init_graph_pool(self) -> Optional[Any]:
+        if not self.config.shared_pool:
+            return None
+        return torch.npu.graph_pool_handle()
 
     def is_enabled(self) -> bool:
         return (
@@ -144,8 +152,7 @@ class ACLGraphBlockRunner:
         graph = torch.npu.NPUGraph()
         self._set_rope_override(block, max_position)
         try:
-            with torch.npu.graph(graph, auto_dispatch_capture=True):
-                output = block(static_x, pos=static_pos)
+            output = self._capture_graph(block, static_x, static_pos, graph)
         finally:
             self._set_rope_override(block, None)
 
@@ -159,3 +166,20 @@ class ACLGraphBlockRunner:
             graph=graph,
             output=output,
         )
+
+    def _capture_graph(
+        self,
+        block: nn.Module,
+        static_x: torch.Tensor,
+        static_pos: Optional[torch.Tensor],
+        graph: "torch.npu.NPUGraph",
+    ) -> torch.Tensor:
+        if self.graph_pool is None:
+            with torch.npu.graph(graph, auto_dispatch_capture=True):
+                return block(static_x, pos=static_pos)
+
+        with torch.npu.graph(graph, pool=self.graph_pool, auto_dispatch_capture=True):
+            output = block(static_x, pos=static_pos)
+        self.capture_with_pool_count += 1
+        return output
+
