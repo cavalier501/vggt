@@ -28,7 +28,6 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from demo_model_loader import load_vggt_weights
-from vggt.graph import GraphConfig
 from vggt.models.vggt import VGGT
 
 
@@ -144,12 +143,10 @@ def run_forward(model, images, mode, dtype):
 
 def load_model(device, model_path, enable_graph=False):
     print("Initializing and loading VGGT model...")
-    model = VGGT()
+    model = VGGT(graph_mode=enable_graph)
     model = load_vggt_weights(model, model_path)
     model.eval()
     model = model.to(device)
-    if enable_graph:
-        model.aggregator.enable_graph(GraphConfig(enabled=True))
     return model
 
 
@@ -341,3 +338,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
