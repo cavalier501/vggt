@@ -6,6 +6,7 @@ from vggt.layers.attention import Attention, Attention_fused
 from vggt.layers.block import Block
 from vggt.layers.mlp import Mlp, Mlp_fused
 from vggt.layers.rope import RotaryPositionEmbedding2D
+
 def _require_npu() -> torch.device:
     try:
         import torch_npu  # noqa: F401
@@ -242,3 +243,4 @@ def test_mlp_fused_rejects_dropout():
             drop=0.1,
             bias=True,
         )
+
