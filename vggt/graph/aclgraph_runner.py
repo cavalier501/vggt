@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
@@ -183,16 +183,10 @@ class ACLGraphBlockRunner:
         graph: "torch.npu.NPUGraph",
     ) -> torch.Tensor:
         if self.graph_pool is not None:
-            try:
-                with torch.npu.graph(graph, pool=self.graph_pool, auto_dispatch_capture=True):
-                    output = block(static_x, pos=static_pos)
-                self.capture_with_pool_count += 1
-                return output
-            except RuntimeError:
-                if self.config.debug:
-                    logger.exception("ACLGraph capture with shared pool failed. Retrying without pool.")
+            with torch.npu.graph(graph, pool=self.graph_pool, auto_dispatch_capture=True):
+                output = block(static_x, pos=static_pos)
+            self.capture_with_pool_count += 1
+            return output
 
         with torch.npu.graph(graph, auto_dispatch_capture=True):
             return block(static_x, pos=static_pos)
-
-
