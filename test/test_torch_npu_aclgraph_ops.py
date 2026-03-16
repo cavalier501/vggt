@@ -54,13 +54,18 @@ def test_attention_fused_torch_npu_ops_can_capture_raw_aclgraph():
         static_x = x.detach().clone()
         static_pos = pos.detach().clone()
         graph = torch.npu.NPUGraph()
+        max_position = int(pos.max().item()) + 1
+        attn.rope.set_max_position_override(max_position)
 
-        with torch.npu.graph(graph, auto_dispatch_capture=True):
-            out = attn(static_x, pos=static_pos)
+        try:
+            with torch.npu.graph(graph, auto_dispatch_capture=True):
+                out = attn(static_x, pos=static_pos)
 
-        torch.npu.synchronize()
-        graph.replay()
-        torch.npu.synchronize()
+            torch.npu.synchronize()
+            graph.replay()
+            torch.npu.synchronize()
+        finally:
+            attn.rope.set_max_position_override(None)
 
     assert out.shape == ref.shape
     assert torch.allclose(ref, out, atol=1e-3, rtol=1e-3)
@@ -145,3 +150,4 @@ def test_npu_fusion_attention_can_capture_raw_aclgraph():
 
     assert out.shape == ref.shape
     assert torch.allclose(ref, out, atol=1e-3, rtol=1e-3)
+
