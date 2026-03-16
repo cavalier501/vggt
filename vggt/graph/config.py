@@ -7,5 +7,6 @@ class GraphConfig:
     backend: str = "aclgraph"
     scope: str = "block"
     debug: bool = False
-    force_eager_sdpa: bool = True
+    force_eager_sdpa: bool = False
     shared_pool: bool = True
+

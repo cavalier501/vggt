@@ -1,11 +1,11 @@
 ﻿import pytest
 import torch
 
+from vggt.graph import ACLGraphBlockRunner, GraphConfig
 from vggt.layers.attention import Attention, Attention_fused
+from vggt.layers.block import Block
 from vggt.layers.mlp import Mlp, Mlp_fused
 from vggt.layers.rope import RotaryPositionEmbedding2D
-
-
 def _require_npu() -> torch.device:
     try:
         import torch_npu  # noqa: F401
@@ -115,6 +115,40 @@ def test_attention_fused_forward_matches_reference_under_autocast():
     assert ref_output.shape == fused_output.shape
     assert ref_output.dtype == fused_output.dtype
     assert torch.allclose(ref_output, fused_output, atol=2e-2, rtol=2e-2)
+
+
+def test_attention_fused_supports_aclgraph_capture():
+    device = _require_npu()
+    torch.manual_seed(42)
+
+    block = Block(
+        dim=1024,
+        num_heads=16,
+        mlp_ratio=2.0,
+        qkv_bias=True,
+        proj_bias=True,
+        ffn_bias=True,
+        qk_norm=True,
+        attn_class=Attention_fused,
+        rope=RotaryPositionEmbedding2D(frequency=100),
+    ).to(device=device, dtype=torch.float32)
+    block.eval()
+
+    runner = ACLGraphBlockRunner(GraphConfig(enabled=True, debug=True, shared_pool=False))
+    x = torch.randn(2, 128, 1024, device=device, dtype=torch.float32)
+    pos = _build_positions(batch_size=2, seq_len=128, device=device)
+
+    with torch.no_grad():
+        ref_output = block(x, pos=pos)
+        if hasattr(torch, "npu"):
+            torch.npu.synchronize()
+        graph_output = runner.run(block, x, pos, block_kind="frame", block_idx=0)
+        if hasattr(torch, "npu"):
+            torch.npu.synchronize()
+
+    assert len(runner.cache) == 1
+    assert graph_output.shape == ref_output.shape
+    assert torch.allclose(ref_output, graph_output, atol=2e-2, rtol=2e-2)
 
 def _build_mlp_pair(device: torch.device):
     torch.manual_seed(42)

@@ -124,7 +124,9 @@ class Attention_fused(nn.Module):
         import torch_npu
 
         feature_dim = tokens.size(-1) // 2
-        max_position = int(positions.max()) + 1
+        max_position = self.rope._max_position_override
+        if max_position is None:
+            max_position = int(positions.max()) + 1
         cos_comp, sin_comp = self.rope._compute_frequency_components(
             feature_dim, max_position, tokens.device, tokens.dtype
         )

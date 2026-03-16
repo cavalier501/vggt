@@ -12,7 +12,7 @@ from torch.utils.checkpoint import checkpoint
 from typing import Optional, Tuple, Union, List, Dict, Any
 
 from vggt.layers import PatchEmbed
-from vggt.layers.attention import Attention
+from vggt.layers.attention import Attention_fused
 from vggt.layers.block import Block
 from vggt.layers.mlp import Mlp
 from vggt.layers.rope import RotaryPositionEmbedding2D, PositionGetter
@@ -90,7 +90,7 @@ class Aggregator(nn.Module):
                     proj_bias=proj_bias,
                     ffn_bias=ffn_bias,
                     init_values=init_values,
-                    attn_class=Attention,
+                    attn_class=Attention_fused,
                     ffn_layer=Mlp,
                     qk_norm=qk_norm,
                     rope=self.rope,
@@ -109,7 +109,7 @@ class Aggregator(nn.Module):
                     proj_bias=proj_bias,
                     ffn_bias=ffn_bias,
                     init_values=init_values,
-                    attn_class=Attention,
+                    attn_class=Attention_fused,
                     ffn_layer=Mlp,
                     qk_norm=qk_norm,
                     rope=self.rope,
@@ -149,10 +149,6 @@ class Aggregator(nn.Module):
         self._graph_runner: Optional[ACLGraphBlockRunner] = None
 
     def enable_graph(self, config: GraphConfig) -> None:
-        if config.force_eager_sdpa:
-            for block in list(self.frame_blocks) + list(self.global_blocks):
-                if hasattr(block, "attn") and hasattr(block.attn, "fused_attn"):
-                    block.attn.fused_attn = False
         self._graph_runner = ACLGraphBlockRunner(config)
 
     def disable_graph(self) -> None:
@@ -360,6 +356,8 @@ def slice_expand_and_flatten(token_tensor, B, S):
     # Finally flatten => shape (B*S, ...)
     combined = combined.view(B * S, *combined.shape[2:])
     return combined
+
+
 
 
 

@@ -1,8 +1,8 @@
 ﻿import pytest
-from functools import partial
 import torch
 
 from vggt.graph import ACLGraphBlockRunner, GraphConfig
+from vggt.layers.attention import Attention_fused
 from vggt.layers.block import Block
 from vggt.layers.rope import RotaryPositionEmbedding2D
 from vggt.models.aggregator import Aggregator
@@ -41,8 +41,8 @@ def _build_block(device: torch.device) -> Block:
         proj_bias=True,
         ffn_bias=True,
         qk_norm=True,
+        attn_class=Attention_fused,
         rope=RotaryPositionEmbedding2D(frequency=10),
-        fused_attn=False,
     ).to(device=device, dtype=torch.float32)
     block.eval()
     return block
@@ -64,10 +64,17 @@ def _build_aggregator(device: torch.device) -> Aggregator:
         qk_norm=True,
         rope_freq=10,
         init_values=0.01,
-        block_fn=partial(Block, fused_attn=False),
     ).to(device=device, dtype=torch.float32)
     model.eval()
     return model
+
+
+def test_aggregator_uses_fused_attention_by_default():
+    device = _require_aclgraph_npu()
+    model = _build_aggregator(device)
+
+    assert isinstance(model.frame_blocks[0].attn, Attention_fused)
+    assert isinstance(model.global_blocks[0].attn, Attention_fused)
 
 
 def test_aclgraph_block_matches_eager():
