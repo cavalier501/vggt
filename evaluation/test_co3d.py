@@ -1,4 +1,4 @@
-import os
+﻿import os
 import torch
 import torch_npu
 from torch_npu.contrib import transfer_to_npu
@@ -199,6 +199,7 @@ def setup_args():
     """Set up command-line arguments for the CO3D evaluation script."""
     parser = argparse.ArgumentParser(description='Test VGGT on CO3D dataset')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode (only test on specific category)')
+    parser.add_argument('--graph', action='store_true', help='Enable ACLGraph on VGGT aggregator during inference')
     parser.add_argument('--use_ba', action='store_true', default=False, help='Enable bundle adjustment')
     parser.add_argument('--fast_eval', action='store_true', default=False, help='Only evaluate 10 sequences per category')
     parser.add_argument('--min_num_images', type=int, default=50, help='Minimum number of images for a sequence')
@@ -210,7 +211,7 @@ def setup_args():
     return parser.parse_args()
 
 
-def load_model(device, model_path):
+def load_model(device, model_path, enable_graph=False):
     """
     Load the VGGT model.
 
@@ -222,7 +223,7 @@ def load_model(device, model_path):
         Loaded VGGT model
     """
     print("Initializing and loading VGGT model...")
-    model = VGGT()
+    model = VGGT(graph_mode=enable_graph)
     # _URL = "https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt"
     # model.load_state_dict(torch.hub.load_state_dict_from_url(_URL))
     print(f"USING {model_path}")
@@ -340,7 +341,7 @@ def main():
     dtype = torch.bfloat16
 
     # Load model
-    model = load_model(device, model_path=args.model_path)
+    model = load_model(device, model_path=args.model_path, enable_graph=args.graph)
 
     # Set random seeds
     set_random_seeds(args.seed)
@@ -397,6 +398,8 @@ def main():
                 model, seq_name, seq_data, category, args.co3d_dir,
                 args.min_num_images, args.num_frames, args.use_ba, device, dtype,
             )
+            if args.graph:
+                model.clear_graph_cache()
 
             print("-" * 50)
 
