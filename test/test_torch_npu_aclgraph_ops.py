@@ -197,3 +197,49 @@ def test_npu_fused_infer_attention_score_can_capture_raw_aclgraph():
     assert torch.allclose(ref.float(), out.float(), atol=1e-2, rtol=1e-2)
 
 
+
+
+def test_npu_fused_infer_attention_score_v2_can_capture_raw_aclgraph():
+    import torch_npu
+
+    _require_aclgraph_npu()
+    if not hasattr(torch_npu, "npu_fused_infer_attention_score_v2"):
+        pytest.skip("torch_npu.npu_fused_infer_attention_score_v2 is not available")
+
+    device = torch.device("npu")
+    dtype = torch.bfloat16
+    torch.manual_seed(0)
+    q = torch.randn(2, 4, 17, 16, device=device, dtype=dtype).contiguous()
+    k = torch.randn(2, 4, 17, 16, device=device, dtype=dtype).contiguous()
+    v = torch.randn(2, 4, 17, 16, device=device, dtype=dtype).contiguous()
+
+    kwargs = {
+        "num_query_heads": 4,
+        "num_key_value_heads": 4,
+        "input_layout": "BNSD",
+        "softmax_scale": float(16 ** -0.5),
+    }
+
+    with torch.no_grad():
+        ref = torch_npu.npu_fused_infer_attention_score_v2(q, k, v, **kwargs)[0]
+        torch.npu.synchronize()
+
+        static_q = q.detach().clone()
+        static_k = k.detach().clone()
+        static_v = v.detach().clone()
+        graph = torch.npu.NPUGraph()
+
+        with torch.npu.graph(graph, auto_dispatch_capture=True):
+            out = torch_npu.npu_fused_infer_attention_score_v2(
+                static_q,
+                static_k,
+                static_v,
+                **kwargs,
+            )[0]
+
+        torch.npu.synchronize()
+        graph.replay()
+        torch.npu.synchronize()
+
+    assert out.shape == ref.shape
+    assert torch.allclose(ref.float(), out.float(), atol=1e-2, rtol=1e-2)
