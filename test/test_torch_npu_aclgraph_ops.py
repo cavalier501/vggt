@@ -151,3 +151,42 @@ def test_npu_fusion_attention_can_capture_raw_aclgraph():
     assert out.shape == ref.shape
     assert torch.allclose(ref, out, atol=1e-3, rtol=1e-3)
 
+def test_npu_fused_infer_attention_score_can_capture_raw_aclgraph():
+    _require_aclgraph_npu()
+
+    device = torch.device("npu")
+    torch.manual_seed(0)
+    q = torch.randn(2, 4, 17, 16, device=device, dtype=torch.float32).contiguous()
+    k = torch.randn(2, 4, 17, 16, device=device, dtype=torch.float32).contiguous()
+    v = torch.randn(2, 4, 17, 16, device=device, dtype=torch.float32).contiguous()
+
+    op = torch.ops.npu.npu_fused_infer_attention_score
+    kwargs = {
+        "num_heads": 4,
+        "input_layout": "BNSD",
+        "scale": float(16 ** -0.5),
+        "num_key_value_heads": 0,
+        "pre_tokens": 65535,
+        "next_tokens": 65535,
+        "sparse_mode": 0,
+        "inner_precise": 0,
+    }
+
+    with torch.no_grad():
+        ref = op(q, k, v, **kwargs)[0]
+        torch.npu.synchronize()
+
+        static_q = q.detach().clone()
+        static_k = k.detach().clone()
+        static_v = v.detach().clone()
+        graph = torch.npu.NPUGraph()
+
+        with torch.npu.graph(graph, auto_dispatch_capture=True):
+            out = op(static_q, static_k, static_v, **kwargs)[0]
+
+        torch.npu.synchronize()
+        graph.replay()
+        torch.npu.synchronize()
+
+    assert out.shape == ref.shape
+    assert torch.allclose(ref, out, atol=1e-3, rtol=1e-3)
