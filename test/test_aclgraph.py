@@ -169,6 +169,27 @@ def test_aggregator_aclgraph_uses_shared_pool_when_available():
     assert runner.capture_with_pool_count > 0
 
 
+
+def test_aggregator_clear_graph_cache_empties_runner_cache():
+    device = _require_aclgraph_npu()
+    model = _build_aggregator(device)
+    model.enable_graph(GraphConfig(enabled=True, shared_pool=True, debug=True))
+
+    runner = model._graph_runner
+    assert runner is not None
+
+    torch.manual_seed(321)
+    images = torch.rand(1, 2, 3, 28, 28, device=device, dtype=torch.float32)
+
+    with torch.no_grad():
+        model(images)
+        if hasattr(torch.npu, "synchronize"):
+            torch.npu.synchronize()
+
+    assert len(runner.cache) > 0
+    model.clear_graph_cache()
+    assert len(runner.cache) == 0
+    assert runner.capture_with_pool_count == 0
 def test_aggregator_disable_graph_restores_eager_path():
     device = _require_aclgraph_npu()
     model = _build_aggregator(device)
@@ -185,5 +206,6 @@ def test_aggregator_disable_graph_restores_eager_path():
     assert isinstance(out, list)
     assert len(out) == model.depth
     assert patch_start_idx == model.patch_start_idx
+
 
 

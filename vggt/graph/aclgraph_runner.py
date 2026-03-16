@@ -65,6 +65,14 @@ class ACLGraphBlockRunner:
             and self._npu_available()
         )
 
+    def clear_cache(self) -> None:
+        self.cache.clear()
+        self.capture_with_pool_count = 0
+        self.graph_pool = self._init_graph_pool()
+        self.uses_shared_pool = self.graph_pool is not None
+        if self._npu_available() and hasattr(torch.npu, "empty_cache"):
+            torch.npu.empty_cache()
+
     @staticmethod
     def _resolve_max_position(pos: Optional[torch.Tensor]) -> Optional[int]:
         if pos is None:

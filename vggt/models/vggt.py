@@ -47,6 +47,9 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
     def disable_graph(self) -> None:
         self.aggregator.disable_graph()
 
+    def clear_graph_cache(self) -> None:
+        self.aggregator.clear_graph_cache()
+
     def forward(self, images: torch.Tensor, query_points: torch.Tensor = None):
         """
         Forward pass of the VGGT model.

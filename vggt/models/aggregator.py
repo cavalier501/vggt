@@ -158,6 +158,10 @@ class Aggregator(nn.Module):
     def disable_graph(self) -> None:
         self._graph_runner = None
 
+    def clear_graph_cache(self) -> None:
+        if self._graph_runner is not None:
+            self._graph_runner.clear_cache()
+
     def __build_patch_embed__(
         self,
         patch_embed,
