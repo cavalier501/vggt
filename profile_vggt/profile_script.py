@@ -30,6 +30,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Profile VGGT on NPU with real images")
     parser.add_argument("--image_folder", type=str, required=True, help="Path to folder containing images")
     parser.add_argument("--model_path", type=str, default=None, help="Optional local path to model.pt")
+    parser.add_argument("--graph", action="store_true", help="Enable ACLGraph on VGGT aggregator during profiling")
     parser.add_argument("--mode", choices=["aggregator", "full"], default="aggregator", help="Profile aggregator or full model forward")
     parser.add_argument("--enable_postprocess", action="store_true", help="Run demo_viser-style postprocess and visualization after profiling")
     parser.add_argument("--profile_dir", type=str, default="profile_vggt/profiling_files", help="Directory to store profiler traces")
@@ -83,9 +84,9 @@ def create_profiler_output_dir(base_dir, mode):
 
 
 
-def load_model(device, model_path):
+def load_model(device, model_path, enable_graph=False):
     print("Initializing and loading VGGT model...")
-    model = VGGT()
+    model = VGGT(graph_mode=enable_graph)
     model = load_vggt_weights(model, model_path)
     model.eval()
     model = model.to(device)
@@ -227,7 +228,7 @@ def main():
     print(f"Using dtype: {dtype}")
     print(f"Profile mode: {args.mode}")
 
-    model = load_model(device, args.model_path)
+    model = load_model(device, args.model_path, enable_graph=args.graph)
 
     mstx_mark(mstx, "load_images_start")
     image_names, images = load_images(args.image_folder, device)
