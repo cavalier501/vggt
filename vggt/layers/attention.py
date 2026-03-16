@@ -47,6 +47,7 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
         self.rope = rope
+        self._graph_capture_mode = False
 
     def forward(self, x: Tensor, pos=None) -> Tensor:
         B, N, C = x.shape
@@ -119,6 +120,10 @@ class Attention_fused(nn.Module):
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
         self.rope = rope
+        self._graph_capture_mode = False
+
+    def set_graph_capture_mode(self, enabled: bool) -> None:
+        self._graph_capture_mode = enabled
 
     def _apply_fused_rope(self, tokens: Tensor, positions: Tensor) -> Tensor:
         import torch_npu
@@ -150,8 +155,12 @@ class Attention_fused(nn.Module):
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
         q, k = self.q_norm(q), self.k_norm(k)
-        q = self._apply_fused_rope(q, pos)
-        k = self._apply_fused_rope(k, pos)
+        if self._graph_capture_mode:
+            q = self.rope(q, pos)
+            k = self.rope(k, pos)
+        else:
+            q = self._apply_fused_rope(q, pos)
+            k = self._apply_fused_rope(k, pos)
 
         # LayerNorm keeps q/k in fp32 under autocast while v may remain bf16.
         # npu_fusion_attention requires query/key/value to have the same dtype.
@@ -161,15 +170,22 @@ class Attention_fused(nn.Module):
         if k.dtype != attn_dtype:
             k = k.to(attn_dtype)
 
-        x = torch_npu.npu_fusion_attention(
-            q.contiguous(),
-            k.contiguous(),
-            v.contiguous(),
-            self.num_heads,
-            "BNSD",
-            scale=float(self.scale),
-            keep_prob=1.0,
-        )[0]
+        if self._graph_capture_mode:
+            q = q * self.scale
+            attn = q @ k.transpose(-2, -1)
+            attn = attn.softmax(dim=-1)
+            attn = self.attn_drop(attn)
+            x = attn @ v
+        else:
+            x = torch_npu.npu_fusion_attention(
+                q.contiguous(),
+                k.contiguous(),
+                v.contiguous(),
+                self.num_heads,
+                "BNSD",
+                scale=float(self.scale),
+                keep_prob=1.0,
+            )[0]
 
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)

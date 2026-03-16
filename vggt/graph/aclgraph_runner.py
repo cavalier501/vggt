@@ -85,6 +85,12 @@ class ACLGraphBlockRunner:
             if hasattr(module, "set_max_position_override"):
                 module.set_max_position_override(max_position)
 
+    @staticmethod
+    def _set_graph_capture_mode(block: nn.Module, enabled: bool) -> None:
+        for module in block.modules():
+            if hasattr(module, "set_graph_capture_mode"):
+                module.set_graph_capture_mode(enabled)
+
     def _make_key(
         self,
         block_kind: str,
@@ -159,9 +165,11 @@ class ACLGraphBlockRunner:
 
         graph = torch.npu.NPUGraph()
         self._set_rope_override(block, max_position)
+        self._set_graph_capture_mode(block, True)
         try:
             output = self._capture_graph(block, static_x, static_pos, graph)
         finally:
+            self._set_graph_capture_mode(block, False)
             self._set_rope_override(block, None)
 
         if hasattr(torch.npu, "synchronize"):
@@ -190,3 +198,4 @@ class ACLGraphBlockRunner:
 
         with torch.npu.graph(graph, auto_dispatch_capture=True):
             return block(static_x, pos=static_pos)
+
