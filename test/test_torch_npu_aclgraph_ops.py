@@ -153,6 +153,7 @@ def test_npu_fusion_attention_can_capture_raw_aclgraph():
     assert torch.allclose(ref, out, atol=1e-3, rtol=1e-3)
 
 def test_npu_fused_infer_attention_score_can_capture_raw_aclgraph():
+    import torch_npu
     _require_aclgraph_npu()
 
     device = torch.device("npu")
