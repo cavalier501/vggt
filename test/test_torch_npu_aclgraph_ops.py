@@ -220,15 +220,20 @@ def test_npu_fused_infer_attention_score_v2_can_capture_raw_aclgraph():
         "softmax_scale": float(16 ** -0.5),
     }
 
+    t0 = time.perf_counter()
+    print(f"[fused_infer_v2] start dtype={dtype} layout={kwargs['input_layout']}")
     with torch.no_grad():
         ref = torch_npu.npu_fused_infer_attention_score_v2(q, k, v, **kwargs)[0]
         torch.npu.synchronize()
+        print(f"[fused_infer_v2] eager done {time.perf_counter() - t0:.3f}s")
 
         static_q = q.detach().clone()
         static_k = k.detach().clone()
         static_v = v.detach().clone()
         graph = torch.npu.NPUGraph()
 
+        t1 = time.perf_counter()
+        print("[fused_infer_v2] capture begin")
         with torch.npu.graph(graph, auto_dispatch_capture=True):
             out = torch_npu.npu_fused_infer_attention_score_v2(
                 static_q,
@@ -236,10 +241,13 @@ def test_npu_fused_infer_attention_score_v2_can_capture_raw_aclgraph():
                 static_v,
                 **kwargs,
             )[0]
+        print(f"[fused_infer_v2] capture end {time.perf_counter() - t1:.3f}s")
 
-        torch.npu.synchronize()
+        t2 = time.perf_counter()
         graph.replay()
         torch.npu.synchronize()
+        print(f"[fused_infer_v2] replay done {time.perf_counter() - t2:.3f}s")
 
     assert out.shape == ref.shape
     assert torch.allclose(ref.float(), out.float(), atol=1e-2, rtol=1e-2)
+
