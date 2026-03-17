@@ -78,9 +78,8 @@ class Attention_fused(nn.Module):
     """
     Fused attention implementation for Aggregator inference blocks.
 
-    Execution modes:
+    Active execution modes:
     - eager: npu_rotary_mul + npu_fusion_attention
-    - aclgraph: plain rope + matmul/softmax attention
     - torch_compile: plain rope + npu_fused_infer_attention_score
     """
 
@@ -114,12 +113,9 @@ class Attention_fused(nn.Module):
         self._graph_backend = "eager"
 
     def set_graph_backend(self, mode: str) -> None:
-        if mode not in {"eager", "aclgraph", "torch_compile"}:
+        if mode not in {"eager", "torch_compile"}:
             raise ValueError(f"Unsupported graph backend mode: {mode}")
         self._graph_backend = mode
-
-    def set_graph_capture_mode(self, enabled: bool) -> None:
-        self.set_graph_backend("aclgraph" if enabled else "eager")
 
     def _apply_fused_rope(self, tokens: Tensor, positions: Tensor) -> Tensor:
         import torch_npu
@@ -157,13 +153,6 @@ class Attention_fused(nn.Module):
             k = k.to(attn_dtype)
         return q, k, v
 
-    def _run_aclgraph_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
-        q = q * self.scale
-        attn = q @ k.transpose(-2, -1)
-        attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
-        return attn @ v
-
     def _run_torch_compile_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
         import torch_npu
 
@@ -181,9 +170,20 @@ class Attention_fused(nn.Module):
             next_tokens=65535,
         )[0]
 
-    def forward(self, x: Tensor, pos=None) -> Tensor:
+    def _run_eager_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
         import torch_npu
 
+        return torch_npu.npu_fusion_attention(
+            q.contiguous(),
+            k.contiguous(),
+            v.contiguous(),
+            self.num_heads,
+            "BNSD",
+            scale=float(self.scale),
+            keep_prob=1.0,
+        )[0]
+
+    def forward(self, x: Tensor, pos=None) -> Tensor:
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
@@ -193,19 +193,7 @@ class Attention_fused(nn.Module):
             q = self._apply_fused_rope(q, pos)
             k = self._apply_fused_rope(k, pos)
             q, k, v = self._to_attention_dtype(q, k, v)
-            x = torch_npu.npu_fusion_attention(
-                q.contiguous(),
-                k.contiguous(),
-                v.contiguous(),
-                self.num_heads,
-                "BNSD",
-                scale=float(self.scale),
-                keep_prob=1.0,
-            )[0]
-        elif self._graph_backend == "aclgraph":
-            q, k = self._apply_standard_rope(q, k, pos)
-            q, k, v = self._to_attention_dtype(q, k, v)
-            x = self._run_aclgraph_attention(q, k, v)
+            x = self._run_eager_attention(q, k, v)
         elif self._graph_backend == "torch_compile":
             q, k = self._apply_standard_rope(q, k, pos)
             q, k, v = self._to_attention_dtype(q, k, v)
@@ -213,6 +201,46 @@ class Attention_fused(nn.Module):
         else:
             raise RuntimeError(f"Unknown graph backend mode: {self._graph_backend}")
 
+        x = x.transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
+
+class AttentionFusedAclgraphDeprecated(Attention_fused):
+    """Deprecated ACLGraph backup for historical reference only.
+
+    This class is intentionally not used by business code. It is kept as a code
+    backup because some fused NPU attention operators do not work reliably with
+    raw NPUGraph capture/replay.
+    """
+
+    def set_graph_backend(self, mode: str) -> None:
+        if mode not in {"eager", "torch_compile", "aclgraph"}:
+            raise ValueError(f"Unsupported graph backend mode: {mode}")
+        self._graph_backend = mode
+
+    def set_graph_capture_mode(self, enabled: bool) -> None:
+        self.set_graph_backend("aclgraph" if enabled else "eager")
+
+    def _run_aclgraph_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+        q = q * self.scale
+        attn = q @ k.transpose(-2, -1)
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+        return attn @ v
+
+    def forward(self, x: Tensor, pos=None) -> Tensor:
+        if self._graph_backend != "aclgraph":
+            return super().forward(x, pos=pos)
+
+        B, N, C = x.shape
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
+        q, k = self.q_norm(q), self.k_norm(k)
+        q, k = self._apply_standard_rope(q, k, pos)
+        q, k, v = self._to_attention_dtype(q, k, v)
+        x = self._run_aclgraph_attention(q, k, v)
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)

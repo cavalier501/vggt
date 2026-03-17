@@ -92,8 +92,6 @@ class TorchCompileBlockRunner:
         for module in block.modules():
             if hasattr(module, "set_graph_backend"):
                 module.set_graph_backend(mode)
-            elif hasattr(module, "set_graph_capture_mode"):
-                module.set_graph_capture_mode(mode == "aclgraph")
 
     def _make_key(
         self,
@@ -127,7 +125,7 @@ class TorchCompileBlockRunner:
         entry = self.cache.get(key)
         if entry is None:
             try:
-                entry = self._compile(block, x, pos)
+                entry = self._compile(block, pos)
             except Exception:
                 self._set_graph_backend(block, "eager")
                 self._set_rope_override(block, None)
@@ -152,7 +150,6 @@ class TorchCompileBlockRunner:
     def _compile(
         self,
         block: nn.Module,
-        x: torch.Tensor,
         pos: Optional[torch.Tensor],
     ) -> TorchCompileEntry:
         max_position = self._resolve_max_position(pos)
@@ -175,4 +172,3 @@ class TorchCompileBlockRunner:
             compiled_block=compiled_block,
             max_position=max_position,
         )
-

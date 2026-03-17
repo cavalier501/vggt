@@ -1,3 +1,10 @@
+"""Deprecated raw ACLGraph runner kept only as historical backup.
+
+This module is no longer part of the active business graph path. The supported
+graph execution path is torch_compile-based. Keep this file only for reference
+when comparing old NPUGraph experiments.
+"""
+
 from __future__ import annotations
 
 import logging

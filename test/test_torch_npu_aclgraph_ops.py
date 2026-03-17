@@ -1,4 +1,7 @@
 import pytest
+
+pytestmark = pytest.mark.skip(reason="deprecated raw ACLGraph probes; kept only for reference")
+
 import time
 import torch
 

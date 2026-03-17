@@ -1,4 +1,5 @@
 import pytest
+pytestmark = pytest.mark.skip("deprecated ACLGraph integration tests; business path now uses torch_compile only", allow_module_level=True)
 import torch
 
 from vggt.graph import ACLGraphBlockRunner, GraphConfig

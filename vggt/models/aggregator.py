@@ -17,7 +17,7 @@ from vggt.layers.block import Block
 from vggt.layers.mlp import Mlp
 from vggt.layers.rope import RotaryPositionEmbedding2D, PositionGetter
 from vggt.layers.vision_transformer import vit_small, vit_base, vit_large, vit_giant2
-from vggt.graph import ACLGraphBlockRunner, GraphConfig, TorchCompileBlockRunner
+from vggt.graph import GraphConfig, TorchCompileBlockRunner
 
 logger = logging.getLogger(__name__)
 
@@ -151,12 +151,9 @@ class Aggregator(nn.Module):
     def enable_graph(self, config: GraphConfig) -> None:
         if self._graph_runner is not None:
             self._graph_runner.clear_cache()
-        if config.backend == "aclgraph":
-            self._graph_runner = ACLGraphBlockRunner(config)
-        elif config.backend == "torch_compile":
-            self._graph_runner = TorchCompileBlockRunner(config)
-        else:
+        if config.backend != "torch_compile":
             raise ValueError(f"Unsupported graph backend: {config.backend}")
+        self._graph_runner = TorchCompileBlockRunner(config)
 
     def disable_graph(self) -> None:
         if self._graph_runner is not None:
