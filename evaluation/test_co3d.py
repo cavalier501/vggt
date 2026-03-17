@@ -356,6 +356,7 @@ def main():
         "orange", "parkingmeter", "pizza", "plant", "stopsign",
         "teddybear", "toaster", "toilet", "toybus", "toyplane",
         "toytrain", "toytruck", "tv", "umbrella", "vase", "wineglass",
+        "hotdog",
     ]
 
     if args.debug:
