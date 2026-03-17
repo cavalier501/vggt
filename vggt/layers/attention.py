@@ -78,9 +78,11 @@ class Attention_fused(nn.Module):
     """
     Fused attention implementation for Aggregator inference blocks.
 
-    Active execution modes:
-    - eager: npu_rotary_mul + npu_fusion_attention
-    - torch_compile: plain rope + npu_fused_infer_attention_score
+    Active execution modes share the same numerical path:
+    - RoPE: npu_rotary_mul
+    - Attention: npu_fused_infer_attention_score
+
+    The graph backend flag is kept only for execution control and cache management.
     """
 
     def __init__(
@@ -153,7 +155,7 @@ class Attention_fused(nn.Module):
             k = k.to(attn_dtype)
         return q, k, v
 
-    def _run_torch_compile_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+    def _run_fia_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
         import torch_npu
 
         seq_len = q.shape[2]
@@ -170,36 +172,19 @@ class Attention_fused(nn.Module):
             next_tokens=65535,
         )[0]
 
-    def _run_eager_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
-        import torch_npu
-
-        return torch_npu.npu_fusion_attention(
-            q.contiguous(),
-            k.contiguous(),
-            v.contiguous(),
-            self.num_heads,
-            "BNSD",
-            scale=float(self.scale),
-            keep_prob=1.0,
-        )[0]
-
     def forward(self, x: Tensor, pos=None) -> Tensor:
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
         q, k = self.q_norm(q), self.k_norm(k)
 
-        if self._graph_backend == "eager":
-            q = self._apply_fused_rope(q, pos)
-            k = self._apply_fused_rope(k, pos)
-            q, k, v = self._to_attention_dtype(q, k, v)
-            x = self._run_eager_attention(q, k, v)
-        elif self._graph_backend == "torch_compile":
-            q, k = self._apply_standard_rope(q, k, pos)
-            q, k, v = self._to_attention_dtype(q, k, v)
-            x = self._run_torch_compile_attention(q, k, v)
-        else:
+        if self._graph_backend not in {"eager", "torch_compile"}:
             raise RuntimeError(f"Unknown graph backend mode: {self._graph_backend}")
+
+        q = self._apply_fused_rope(q, pos)
+        k = self._apply_fused_rope(k, pos)
+        q, k, v = self._to_attention_dtype(q, k, v)
+        x = self._run_fia_attention(q, k, v)
 
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
