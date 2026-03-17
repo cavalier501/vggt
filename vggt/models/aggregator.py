@@ -1,4 +1,4 @@
-﻿# Copyright (c) Meta Platforms, Inc. and affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the license found in the
@@ -17,7 +17,7 @@ from vggt.layers.block import Block
 from vggt.layers.mlp import Mlp
 from vggt.layers.rope import RotaryPositionEmbedding2D, PositionGetter
 from vggt.layers.vision_transformer import vit_small, vit_base, vit_large, vit_giant2
-from vggt.graph import ACLGraphBlockRunner, GraphConfig
+from vggt.graph import ACLGraphBlockRunner, GraphConfig, TorchCompileBlockRunner
 
 logger = logging.getLogger(__name__)
 
@@ -146,12 +146,21 @@ class Aggregator(nn.Module):
             self.register_buffer(name, torch.FloatTensor(value).view(1, 1, 3, 1, 1), persistent=False)
 
         self.use_reentrant = False # hardcoded to False
-        self._graph_runner: Optional[ACLGraphBlockRunner] = None
+        self._graph_runner: Optional[Any] = None
 
     def enable_graph(self, config: GraphConfig) -> None:
-        self._graph_runner = ACLGraphBlockRunner(config)
+        if self._graph_runner is not None:
+            self._graph_runner.clear_cache()
+        if config.backend == "aclgraph":
+            self._graph_runner = ACLGraphBlockRunner(config)
+        elif config.backend == "torch_compile":
+            self._graph_runner = TorchCompileBlockRunner(config)
+        else:
+            raise ValueError(f"Unsupported graph backend: {config.backend}")
 
     def disable_graph(self) -> None:
+        if self._graph_runner is not None:
+            self._graph_runner.clear_cache()
         self._graph_runner = None
 
     def clear_graph_cache(self) -> None:
@@ -356,6 +365,7 @@ def slice_expand_and_flatten(token_tensor, B, S):
     # Finally flatten => shape (B*S, ...)
     combined = combined.view(B * S, *combined.shape[2:])
     return combined
+
 
 
 

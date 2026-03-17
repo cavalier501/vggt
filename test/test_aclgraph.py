@@ -80,7 +80,7 @@ def test_aggregator_uses_fused_attention_by_default():
 def test_aclgraph_block_matches_eager():
     device = _require_aclgraph_npu()
     block = _build_block(device)
-    runner = ACLGraphBlockRunner(GraphConfig(enabled=True, debug=True))
+    runner = ACLGraphBlockRunner(GraphConfig(enabled=True, backend="aclgraph", debug=True))
 
     torch.manual_seed(42)
     x = torch.randn(2, 17, 64, device=device, dtype=torch.float32)
@@ -102,7 +102,7 @@ def test_aclgraph_block_matches_eager():
 def test_aclgraph_runner_replays_same_shape_and_caches_new_shape():
     device = _require_aclgraph_npu()
     block = _build_block(device)
-    runner = ACLGraphBlockRunner(GraphConfig(enabled=True, debug=True))
+    runner = ACLGraphBlockRunner(GraphConfig(enabled=True, backend="aclgraph", debug=True))
 
     torch.manual_seed(7)
     x = torch.randn(2, 17, 64, device=device, dtype=torch.float32)
@@ -130,7 +130,7 @@ def test_aggregator_aclgraph_matches_eager():
     eager_model = _build_aggregator(device)
     graph_model = _build_aggregator(device)
     graph_model.load_state_dict(eager_model.state_dict(), strict=True)
-    graph_model.enable_graph(GraphConfig(enabled=True, debug=True))
+    graph_model.enable_graph(GraphConfig(enabled=True, backend="aclgraph", debug=True))
 
     torch.manual_seed(21)
     images = torch.rand(1, 2, 3, 28, 28, device=device, dtype=torch.float32)
@@ -156,7 +156,7 @@ def test_aggregator_aclgraph_matches_eager():
 def test_aggregator_aclgraph_uses_shared_pool_when_available():
     device = _require_aclgraph_npu()
     model = _build_aggregator(device)
-    model.enable_graph(GraphConfig(enabled=True, shared_pool=True, debug=True))
+    model.enable_graph(GraphConfig(enabled=True, backend="aclgraph", shared_pool=True, debug=True))
 
     runner = model._graph_runner
     assert runner is not None
@@ -167,7 +167,7 @@ def test_aggregator_aclgraph_uses_shared_pool_when_available():
 def test_aggregator_clear_graph_cache_empties_runner_cache():
     device = _require_aclgraph_npu()
     model = _build_aggregator(device)
-    model.enable_graph(GraphConfig(enabled=True, debug=True))
+    model.enable_graph(GraphConfig(enabled=True, backend="aclgraph", debug=True))
 
     runner = model._graph_runner
     assert runner is not None
@@ -189,7 +189,7 @@ def test_aggregator_clear_graph_cache_empties_runner_cache():
 def test_aggregator_disable_graph_restores_eager_path():
     device = _require_aclgraph_npu()
     model = _build_aggregator(device)
-    model.enable_graph(GraphConfig(enabled=True, debug=True))
+    model.enable_graph(GraphConfig(enabled=True, backend="aclgraph", debug=True))
     model.disable_graph()
 
     torch.manual_seed(99)
@@ -202,3 +202,4 @@ def test_aggregator_disable_graph_restores_eager_path():
     assert isinstance(out, list)
     assert len(out) == model.depth
     assert patch_start_idx == model.patch_start_idx
+
