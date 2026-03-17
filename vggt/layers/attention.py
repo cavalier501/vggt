@@ -78,11 +78,9 @@ class Attention_fused(nn.Module):
     """
     Fused attention implementation for Aggregator inference blocks.
 
-    Active execution modes share the same numerical path:
-    - RoPE: npu_rotary_mul
+    Both eager and torch_compile paths share the same operator set:
+    - RoPE: RotaryPositionEmbedding2D.forward -> npu_rotary_mul
     - Attention: npu_fused_infer_attention_score
-
-    The graph backend flag is kept only for execution control and cache management.
     """
 
     def __init__(
@@ -118,29 +116,6 @@ class Attention_fused(nn.Module):
         if mode not in {"eager", "torch_compile"}:
             raise ValueError(f"Unsupported graph backend mode: {mode}")
         self._graph_backend = mode
-
-    def _apply_fused_rope(self, tokens: Tensor, positions: Tensor) -> Tensor:
-        import torch_npu
-
-        feature_dim = tokens.size(-1) // 2
-        max_position = self.rope._max_position_override
-        if max_position is None:
-            max_position = int(positions.max()) + 1
-        cos_comp, sin_comp = self.rope._compute_frequency_components(
-            feature_dim, max_position, tokens.device, tokens.dtype
-        )
-
-        vertical_features, horizontal_features = tokens.chunk(2, dim=-1)
-
-        cos_y = F.embedding(positions[..., 0], cos_comp)[:, None, :, :].contiguous()
-        sin_y = F.embedding(positions[..., 0], sin_comp)[:, None, :, :].contiguous()
-        vertical_features = torch_npu.npu_rotary_mul(vertical_features, cos_y, sin_y, rotary_mode="half")
-
-        cos_x = F.embedding(positions[..., 1], cos_comp)[:, None, :, :].contiguous()
-        sin_x = F.embedding(positions[..., 1], sin_comp)[:, None, :, :].contiguous()
-        horizontal_features = torch_npu.npu_rotary_mul(horizontal_features, cos_x, sin_x, rotary_mode="half")
-
-        return torch.cat((vertical_features, horizontal_features), dim=-1)
 
     def _apply_standard_rope(self, q: Tensor, k: Tensor, pos: Tensor | None) -> tuple[Tensor, Tensor]:
         if self.rope is None:
@@ -181,8 +156,7 @@ class Attention_fused(nn.Module):
         if self._graph_backend not in {"eager", "torch_compile"}:
             raise RuntimeError(f"Unknown graph backend mode: {self._graph_backend}")
 
-        q = self._apply_fused_rope(q, pos)
-        k = self._apply_fused_rope(k, pos)
+        q, k = self._apply_standard_rope(q, k, pos)
         q, k, v = self._to_attention_dtype(q, k, v)
         x = self._run_fia_attention(q, k, v)
 
